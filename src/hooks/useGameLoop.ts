@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
 interface Player {
   x: number;
@@ -54,7 +55,12 @@ interface GameState {
   safeZoneTimer: number;
 }
 
-export const useGameLoop = (canvasRef: React.RefObject<HTMLCanvasElement>, gameStarted: boolean) => {
+export const useGameLoop = (
+  canvasRef: React.RefObject<HTMLCanvasElement>, 
+  gameStarted: boolean,
+  joystickInput?: { x: number; y: number },
+  isShooting?: boolean
+) => {
   const [player, setPlayer] = useState<Player>({
     x: 600,
     y: 400,
@@ -152,6 +158,34 @@ export const useGameLoop = (canvasRef: React.RefObject<HTMLCanvasElement>, gameS
     };
   }, [canvasRef]);
 
+  const snapToNearestEnemy = useCallback((playerAngle: number, playerX: number, playerY: number): number => {
+    const aimConeAngle = Math.PI / 4; // 45 degrees
+    const maxAimDistance = 300;
+    
+    let nearestEnemy: Enemy | null = null;
+    let nearestDistance = maxAimDistance;
+
+    enemies.forEach(enemy => {
+      const distance = Math.hypot(enemy.x - playerX, enemy.y - playerY);
+      if (distance > maxAimDistance) return;
+
+      const angleToEnemy = Math.atan2(enemy.y - playerY, enemy.x - playerX);
+      const angleDiff = Math.abs(angleToEnemy - playerAngle);
+
+      if (angleDiff < aimConeAngle && distance < nearestDistance) {
+        nearestEnemy = enemy;
+        nearestDistance = distance;
+      }
+    });
+
+    if (nearestEnemy) {
+      const targetAngle = Math.atan2(nearestEnemy.y - playerY, nearestEnemy.x - playerX);
+      return playerAngle * 0.6 + targetAngle * 0.4; // 40% aim assist
+    }
+
+    return playerAngle;
+  }, [enemies]);
+
   const handleMouseDown = useCallback(() => {
     if (gameState.status !== 'playing') return;
     
@@ -159,7 +193,13 @@ export const useGameLoop = (canvasRef: React.RefObject<HTMLCanvasElement>, gameS
       const now = Date.now();
       if (now - prev.lastShot < prev.fireRate || prev.ammo <= 0) return prev;
 
-      const angle = Math.atan2(mousePos.current.y - prev.y, mousePos.current.x - prev.x);
+      let angle = Math.atan2(mousePos.current.y - prev.y, mousePos.current.x - prev.x);
+      
+      // Apply auto-aim for mobile
+      if (isShooting) {
+        angle = snapToNearestEnemy(angle, prev.x, prev.y);
+      }
+
       const speed = 8;
 
       setBullets(b => [
@@ -173,9 +213,16 @@ export const useGameLoop = (canvasRef: React.RefObject<HTMLCanvasElement>, gameS
         },
       ]);
 
+      // Haptic feedback on mobile
+      try {
+        Haptics.impact({ style: ImpactStyle.Light });
+      } catch (e) {
+        // Haptics not available
+      }
+
       return { ...prev, ammo: prev.ammo - 1, lastShot: now };
     });
-  }, [gameState.status]);
+  }, [gameState.status, isShooting, snapToNearestEnemy]);
 
   const handlePickupWeapon = useCallback(() => {
     setWeapons(prev => {
@@ -252,10 +299,17 @@ export const useGameLoop = (canvasRef: React.RefObject<HTMLCanvasElement>, gameS
         let newX = prev.x;
         let newY = prev.y;
 
-        if (keys['w']) newY -= prev.speed;
-        if (keys['s']) newY += prev.speed;
-        if (keys['a']) newX -= prev.speed;
-        if (keys['d']) newX += prev.speed;
+        // Mobile joystick input
+        if (joystickInput && (joystickInput.x !== 0 || joystickInput.y !== 0)) {
+          newX += joystickInput.x * prev.speed;
+          newY += joystickInput.y * prev.speed;
+        } else {
+          // Desktop keyboard input
+          if (keys['w']) newY -= prev.speed;
+          if (keys['s']) newY += prev.speed;
+          if (keys['a']) newX -= prev.speed;
+          if (keys['d']) newX += prev.speed;
+        }
 
         newX = Math.max(20, Math.min(1180, newX));
         newY = Math.max(20, Math.min(780, newY));
@@ -264,6 +318,11 @@ export const useGameLoop = (canvasRef: React.RefObject<HTMLCanvasElement>, gameS
 
         return { ...prev, x: newX, y: newY, angle };
       });
+
+      // Mobile continuous shooting
+      if (isShooting) {
+        handleMouseDown();
+      }
 
       // Update enemies
       setEnemies(prev => {
@@ -340,6 +399,12 @@ export const useGameLoop = (canvasRef: React.RefObject<HTMLCanvasElement>, gameS
                       eliminations: g.eliminations + 1,
                       alive: g.alive - 1,
                     }));
+                    // Haptic feedback on kill
+                    try {
+                      Haptics.impact({ style: ImpactStyle.Medium });
+                    } catch (e) {
+                      // Haptics not available
+                    }
                     return false;
                   }
                   enemy.health = newHealth;
@@ -409,7 +474,7 @@ export const useGameLoop = (canvasRef: React.RefObject<HTMLCanvasElement>, gameS
     }, 1000 / 60);
 
     return () => clearInterval(interval);
-  }, [gameStarted, keys, player.x, player.y, enemies.length, gameState.status, gameState.alive, safeZone]);
+  }, [gameStarted, keys, player.x, player.y, enemies.length, gameState.status, gameState.alive, safeZone, joystickInput, isShooting, handleMouseDown]);
 
   return {
     player,

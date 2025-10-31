@@ -2,10 +2,17 @@ import { useEffect, useRef, useState } from 'react';
 import { useGameLoop } from '@/hooks/useGameLoop';
 import { GameHUD } from './GameHUD';
 import { GameOver } from './GameOver';
+import { useDeviceDetection } from '@/hooks/useDeviceDetection';
+import { useMobileControls } from '@/hooks/useMobileControls';
+import { VirtualJoystick } from './VirtualJoystick';
+import { ShootButton } from './ShootButton';
+import { MobileActionButton } from './MobileActionButton';
 
 export const GameCanvas = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [gameStarted, setGameStarted] = useState(false);
+  const { isMobile } = useDeviceDetection();
+  const { joystickInput, isShooting, handleJoystickMove, handleShootStart, handleShootEnd } = useMobileControls();
   
   const {
     player,
@@ -21,7 +28,9 @@ export const GameCanvas = () => {
     handleMouseDown,
     handlePickupWeapon,
     restartGame,
-  } = useGameLoop(canvasRef, gameStarted);
+  } = useGameLoop(canvasRef, gameStarted, joystickInput, isShooting);
+
+  const nearWeapon = weapons.some(w => Math.hypot(w.x - player.x, w.y - player.y) < 30);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -152,9 +161,19 @@ export const GameCanvas = () => {
             <h1 className="text-6xl font-bold text-foreground tracking-wider">BATTLE ROYALE</h1>
             <p className="text-xl text-muted-foreground">Last one standing wins</p>
             <div className="space-y-2 text-muted-foreground">
-              <p>WASD - Move</p>
-              <p>Mouse - Aim & Shoot</p>
-              <p>E - Pick up weapons</p>
+            {isMobile ? (
+                <>
+                  <p>Joystick - Move</p>
+                  <p>Fire Button - Shoot</p>
+                  <p>Action Button - Pick up weapons</p>
+                </>
+              ) : (
+                <>
+                  <p>WASD - Move</p>
+                  <p>Mouse - Aim & Shoot</p>
+                  <p>E - Pick up weapons</p>
+                </>
+              )}
             </div>
             <button
               onClick={() => setGameStarted(true)}
@@ -182,6 +201,18 @@ export const GameCanvas = () => {
             alive={gameState.alive}
             safeZoneTimer={gameState.safeZoneTimer}
           />
+
+          {isMobile && (
+            <>
+              <VirtualJoystick onMove={handleJoystickMove} />
+              <ShootButton onShootStart={handleShootStart} onShootEnd={handleShootEnd} />
+              <MobileActionButton 
+                onAction={handlePickupWeapon} 
+                visible={nearWeapon}
+                label="Pick Up (E)"
+              />
+            </>
+          )}
 
           {(gameState.status === 'victory' || gameState.status === 'defeat') && (
             <GameOver
